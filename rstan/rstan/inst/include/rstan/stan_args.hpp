@@ -93,6 +93,7 @@ namespace rstan {
     unsigned int chain_id;
     std::string init;
     SEXP init_list;
+    SEXP init_inv_metric;    
     double init_radius;
     // FIXME(syclik): remove `enable_random_init`
     bool enable_random_init; // enable randomly partially specifying inits 
@@ -353,6 +354,7 @@ namespace rstan {
           get_rlist_element(ctrl_lst, "adapt_window", ctrl.sampling.adapt_window, 25U);
           get_rlist_element(ctrl_lst, "stepsize", ctrl.sampling.stepsize, 1.0);
           get_rlist_element(ctrl_lst, "stepsize_jitter", ctrl.sampling.stepsize_jitter, 0.0);
+          get_rlist_element(ctrl_lst, "init_inv_metric", init_inv_metric);          
 
           if (get_rlist_element(in, "algorithm", t_str)) {
             if (t_str == "HMC") ctrl.sampling.algorithm = HMC;
@@ -444,6 +446,7 @@ namespace rstan {
       if (0 >= init_radius)  init = "0";
       if (init == "0") init_radius = 0;
       get_rlist_element(in, "enable_random_init", enable_random_init, true);
+      
       validate_args();
     }
 
@@ -750,6 +753,9 @@ namespace rstan {
     }
     SEXP get_init_list() const {
       return init_list;
+    }
+    SEXP get_init_inv_metric() const {
+      return init_inv_metric;
     }
 
     void write_args_as_comment(std::ostream& ostream) const {

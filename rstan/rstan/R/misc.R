@@ -436,7 +436,7 @@ config_argss <- function(chains, iter, warmup, thin,
                             "adapt_init_buffer", "adapt_term_buffer",
                             "adapt_window", "stepsize",
                             "stepsize_jitter", "metric", "int_time",
-                            "max_treedepth",
+                            "max_treedepth","init_inv_metric",
                             "epsilon", "error"),
                           pre_msg = "'control' list contains unknown members of names: ",
                           call. = FALSE)

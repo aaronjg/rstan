@@ -441,6 +441,9 @@ int command(stan_args& args, Model& model, Rcpp::List& holder,
   else
     init_context_ptr.reset(new stan::io::empty_var_context());
 
+  std::auto_ptr<stan::io::var_context> init_inv_metric_ptr;
+  init_inv_metric_ptr.reset(new io::rlist_ref_var_context(args.get_init_inv_metric()));
+
   std::vector<std::string> constrained_param_names;
   model.constrained_param_names(constrained_param_names);
   rstan::value init_writer;
@@ -647,6 +650,7 @@ int command(stan_args& args, Model& model, Rcpp::List& holder,
 
           return_code = stan::services::sample
             ::hmc_nuts_diag_e_adapt(model, *init_context_ptr,
+                                    *init_inv_metric_ptr,
                                     random_seed, id, init_radius,
                                     num_warmup, num_samples,
                                     num_thin, save_warmup, refresh,
