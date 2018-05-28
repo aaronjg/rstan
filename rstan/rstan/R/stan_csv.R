@@ -117,7 +117,24 @@ parse_stancsv_comments <- function(comments) {
   c(values, add_lst)  
 }
 
+HexChar<-function(number) {
+  x<-as.integer(number%%16)
+  str<-as.character(as.hexmode(x))
+  return (str)
+}
 
+HexString<-function(numberX) {
+  number <- as.double(numberX)
+  stringy<-""
+  for (i in 1:16) {
+    stringy<-paste(HexChar(number), stringy, sep="")
+    number <- number/16
+  }
+  return (stringy)
+}
+is.na.mmap <- function(x) is.na(x[])
+as.double.mmap <-function(x) as.double(x[])
+var.mmap <- function(x) var(x[])
 read_stan_csv <- function(csvfiles, col_major = TRUE) {
   # Read the csv files saved from Stan (or RStan) to a stanfit object
   # Args:
@@ -140,16 +157,35 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     vnames <- strsplit(header, ",")[[1]]
     iter.count <- attr(header,"iter.count")
     variable.count <- length(vnames)
-    df <- structure(replicate(variable.count,list(numeric(iter.count))),
+    csv.base <- gsub(".csv$","",csvfiles[[i]])
+    f <-paste0(csv.base,".mmp")
+    writeBin(rep(0L,iter.count*variable.count), f)
+    bigmmap <- mmap::mmap(f,mmap::real32(1))
+    mmapptr <- as.numeric(xptr_address(bigmmap$data))
+    createMmap <- function(i){
+      newmmap <- new.env()
+      class(newmmap) <- "mmap"   
+      for(n in ls(bigmmap, all.names=TRUE)) assign(n, bigmmap[[n]], newmmap)
+      newmmap$bytes <- iter.count*4
+      off = as.integer((i-1)*4*iter.count)
+      newptr <-  paste0("0x",HexString(mmapptr+off))
+      newmmap$data <- new_xptr(newptr)
+      newmmap$offset <- off
+      newmmap
+    }
+    mmaps <- lapply(seq_along(vnames),createMmap)
+    print("mmaps done")
+    dim(bigmmap) <- c(iter.count,variable.count)
+    df <- structure(mmaps,
                     names = vnames,
                     row.names = c(NA,-iter.count),
                     class = "data.frame")
     comments = character()
     con <- file(csvfiles[[i]],"r")
-    buffer.size <- min(ceiling(1000000/variable.count),iter.count)
+    buffer.size <- as.integer(min(ceiling(1000000/variable.count),iter.count))
     row.buffer <- matrix(ncol=variable.count,nrow=buffer.size)
-    row <- 1
-    buffer.pointer <- 1  
+    row <- 1L
+    buffer.pointer <- 1L
     while(length(char <- readChar(con, 1)) > 0) {
       # back up 1 character, since we already looked at one to check for comment
       if(getRversion() >="3.5.0") seek(con,seek(con)-1)
@@ -168,11 +204,11 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
       row.buffer[buffer.pointer,] <- scan(con, nlines=1, sep="," ,quiet=TRUE)
         seek(con,seek(con))
       if(buffer.pointer == buffer.size){
-        df[row:(row + buffer.size - 1), ] <- row.buffer
+        bigmmap[row:(row + buffer.size - 1L), ] <- row.buffer
         row <- row + buffer.size
-        buffer.pointer <- 0
+        buffer.pointer <- 0L
       }
-      buffer.pointer <- buffer.pointer + 1
+      buffer.pointer <- buffer.pointer + 1L
       
     }
     if(buffer.pointer > 1){
