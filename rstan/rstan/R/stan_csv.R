@@ -117,6 +117,109 @@ parse_stancsv_comments <- function(comments) {
   c(values, add_lst)  
 }
 
+read_one_chain_csv <- function(csvfile, col_major=TRUE){
+
+  header <- read_csv_header(csvfile)
+  lineno <- attr(header, 'lineno')
+  vnames <- strsplit(header, ",")[[1]]
+  iter.count <- attr(header,"iter.count")
+  variable.count <- length(vnames)
+  paridx <- paridx_fun(vnames)
+  fnames <- vnames
+  par_fnames <- c(fnames[paridx], "lp__")
+  midx <- if (!col_major) multi_idx_row2colm(dims_oi) else 1:length(par_fnames)    
+  lp__idx <- attr(paridx, 'meta')["lp__"]
+  all.par.idx <- c(paridx, lp__idx)[midx]
+  all.sampler.idx <- setdiff(attr(paridx, 'meta'), lp__idx)
+  param.count <- length(all.par.idx)
+  sampler.param.count <- length(all.sampler.idx)
+  
+  df <- structure(replicate(param.count,list(numeric(iter.count))),
+                  names = vnames[all.par.idx],
+                  row.names = c(NA,-iter.count),
+                  class = "data.frame")
+  
+  s.df <- structure(replicate(sampler.param.count,list(numeric(iter.count))),
+                    names = vnames[all.sampler.idx],
+                    row.names = c(NA,-iter.count),
+                    class = "data.frame")
+  
+  comments = character()
+  con <- file(csvfile,"r")
+  buffer.size <- min(ceiling(1000000/variable.count),iter.count)
+  row.buffer <- matrix(ncol=variable.count,nrow=buffer.size)
+  row <- 1
+  buffer.pointer <- 1  
+  while(length(char <- readChar(con, 1)) > 0) {
+    # back up 1 character, since we already looked at one to check for comment
+    if(getRversion() >="3.5.0") seek(con,seek(con)-1)
+    else seek(con,origin="current",-1)
+    if(char == "#"){
+      line <- readLines(con, n = 1)
+      if(getRversion() >="3.5.0") seek(con,seek(con))
+      comments <- c(comments, line)
+      next
+    }
+    if(char == "l"){ #start of lp__ in header
+      readLines(con, n = 1)
+      if(getRversion() >="3.5.0") seek(con,seek(con))
+      next
+    }
+    row.buffer[buffer.pointer,] <- scan(con, nlines=1, sep="," ,quiet=TRUE)
+    seek(con,seek(con))
+    if(buffer.pointer == buffer.size){
+      df[row:(row + buffer.size - 1), ] <- row.buffer[,all.par.idx]
+      s.df[row:(row + buffer.size - 1), ] <- row.buffer[,all.sampler.idx]
+      row <- row + buffer.size
+      buffer.pointer <- 0
+    }
+    buffer.pointer <- buffer.pointer + 1
+    
+  }
+  if(buffer.pointer > 1){
+    df[row:(row + buffer.pointer - 2), ] <- row.buffer[1:(buffer.pointer-1), all.par.idx]
+    s.df[row:(row + buffer.pointer - 2), ] <- row.buffer[1:(buffer.pointer-1), all.sampler.idx]
+  }
+  
+  close(con)
+  parsed.comments <- parse_stancsv_comments(comments)
+  attr(df,"sampler_params") <- s.df
+  attr(df,"adaptation_info") <- parsed.comments$adaptation_info
+  attr(df,"args") <- with(parsed.comments,list(sampler_t = sampler_t,
+                                               chain_id = chain_id))
+  if(parsed.comments$has_time)
+    attr(df, "elapsed_time") <- get_time_from_csv(parsed.comments$time_info)
+
+  save_warmup <- parsed.comments$save_warmup
+  n_save <- nrow(df)
+  n_kept0 <- 1 + with(parsed.comments,(iter - warmup - 1) %/% thin)
+  warmup2 <- 0
+  if (max(save_warmup) == 0L) { # all equal to 0L
+    n_kept <- n_save
+  } else if (min(save_warmup) == 1L) { # all equals to 1L 
+    warmup2 <- 1 + (warmup[1] - 1) %/% thin[1]
+    n_kept <- n_save - warmup2 
+  }
+  if (n_kept0[1] != n_kept) {
+    warning("the number of iterations after warmup found (", n_kept, 
+            ") does not match iter/warmup/thin from CSV comments (",
+            paste(n_kept0, collapse = ','), ")")
+    
+    if (n_kept < 0) {
+      warmup <- warmup + n_kept
+      n_kept <- 0
+      mode <- 2L
+    }
+    n_kept0 <- n_save
+    iter <- n_save
+  }
+  idx_kept <- if (warmup2 == 0) 1:n_kept else -(1:warmup2)
+  
+  m <- vapply(df, function(x) mean(x[idx_kept]), numeric(1))
+  attr(df, "mean_pars") <- m[-length(m)]
+  attr(df, "mean_lp__") <- m["lp__"]
+  list(df,parsed.comments,c(n_kept=n_kept,n_save=n_save,warmup2=warmup2))
+}
 
 read_stan_csv <- function(csvfiles, col_major = TRUE) {
   # Read the csv files saved from Stan (or RStan) to a stanfit object
@@ -130,103 +233,26 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     stop("csvfiles does not contain any CSV file name")
 
   g_skip <- 10
-  
-  ss_lst <- vector("list", length(csvfiles))
-  cs_lst2 <- vector("list", length(csvfiles))
 
+  samples <- vector("list", length(csvfiles))
+  cs_lst2 <- vector("list", length(csvfiles))    
+  
   for (i in seq_along(csvfiles)) {
-    header <- read_csv_header(csvfiles[i])
-    lineno <- attr(header, 'lineno')
-    vnames <- strsplit(header, ",")[[1]]
-    iter.count <- attr(header,"iter.count")
-    variable.count <- length(vnames)
-    df <- structure(replicate(variable.count,list(numeric(iter.count))),
-                    names = vnames,
-                    row.names = c(NA,-iter.count),
-                    class = "data.frame")
-    comments = character()
-    con <- file(csvfiles[[i]],"r")
-    buffer.size <- min(ceiling(1000000/variable.count),iter.count)
-    row.buffer <- matrix(ncol=variable.count,nrow=buffer.size)
-    row <- 1
-    buffer.pointer <- 1  
-    while(length(char <- readChar(con, 1)) > 0) {
-      # back up 1 character, since we already looked at one to check for comment
-      if(getRversion() >="3.5.0") seek(con,seek(con)-1)
-      else seek(con,origin="current",-1)
-      if(char == "#"){
-        line <- readLines(con, n = 1)
-        if(getRversion() >="3.5.0") seek(con,seek(con))
-        comments <- c(comments, line)
-        next
-      }
-      if(char == "l"){ #start of lp__ in header
-        readLines(con, n = 1)
-        if(getRversion() >="3.5.0") seek(con,seek(con))
-        next
-      }
-      row.buffer[buffer.pointer,] <- scan(con, nlines=1, sep="," ,quiet=TRUE)
-        seek(con,seek(con))
-      if(buffer.pointer == buffer.size){
-        df[row:(row + buffer.size - 1), ] <- row.buffer
-        row <- row + buffer.size
-        buffer.pointer <- 0
-      }
-      buffer.pointer <- buffer.pointer + 1
-      
-    }
-    if(buffer.pointer > 1){
-      df[row:(row + buffer.pointer - 2), ] <- row.buffer[1:(buffer.pointer-1), ]
-    }
-
-    close(con)
-    cs_lst2[[i]] <- parse_stancsv_comments(comments)
-    ss_lst[[i]] <- df
-  } 
-
-  # use the first CSV file name as model name
-  m_name <- sub("(_\\d+)*$", '', filename_rm_ext(basename(csvfiles[1])))
-
-  sdate <- do.call(max, lapply(csvfiles, function(csv) file.info(csv)$mtime))
-  sdate <- format(sdate, "%a %b %d %X %Y") # same format as date() 
-
-  chains <- length(ss_lst)
-  fnames <- names(ss_lst[[1]])
-  n_save <- nrow(ss_lst[[1]])
-  paridx <- paridx_fun(fnames)
-  lp__idx <- attr(paridx, 'meta')["lp__"]
-  par_fnames <- c(fnames[paridx], "lp__")
-  pars_oi <- unique_par(par_fnames)
-  dims_oi <- lapply(pars_oi, 
-                    function(i) {
-                      pat <- paste('^', i, '(\\.\\d+)*$', sep = '')
-                      i_fnames <- par_fnames[grepl(pat, par_fnames)]
-                      get_dims_from_fnames(i_fnames, i) 
-                    })
-  names(dims_oi) <- pars_oi
-  midx <- if (!col_major) multi_idx_row2colm(dims_oi) else 1:length(par_fnames)
+    out <- read_one_chain_csv(csvfiles[[i]],col_major)
+    samples[[i]] <- out[[1]]
+    cs_lst2[[i]] <- out[[2]]
+    n_kept <- out[[3]][['n_kept']]
+    n_save <- out[[3]][['n_save']]
+    warmup2 <- out[[3]][['warmup2']]
+  }
+  chains <- length(samples)
   if (chains > 1) {
-    if (!all(sapply(ss_lst[-1], function(i) identical(names(i), fnames))))
+    if (!all(sapply(samples[-1], function(i) identical(colnames(i),
+                                                       colnames(samples[[1]])))))
       stop('the CSV files do not have same parameters')
-    if (!all(sapply(ss_lst[-1], function(i) identical(length(i[[1]]), n_save)))) 
-      stop('the number of iterations are not the same in all CSV files')
-  } 
-  mode <- 0L
-  
-  samples <- lapply(ss_lst, 
-                    function(df) {
-                      ss <- df[c(paridx, lp__idx)[midx]]
-                      attr(ss, "sampler_params") <- df[setdiff(attr(paridx, 'meta'), lp__idx)] 
-                      ss
-                    })
-  par_fnames <- par_fnames[midx]
-  for (i in seq_along(samples)) {
-    attr(samples[[i]], "adaptation_info") <- cs_lst2[[i]]$adaptation_info 
-    attr(samples[[i]], "args") <- 
-      list(sampler_t = cs_lst2[[i]]$sampler_t,
-           chain_id = cs_lst2[[i]]$chain_id)
-    if (cs_lst2[[i]]$has_time)
-      attr(samples[[i]], "elapsed_time") <- get_time_from_csv(cs_lst2[[i]]$time_info)
+    if (!all(sapply(samples[-1], function(i) NROW(i)==n_save)))
+      stop('the number of iterations are not the same in all CSV file
+s')
   } 
 
   save_warmup <- sapply(cs_lst2, function(i) i$save_warmup)
@@ -235,46 +261,32 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   iter <- sapply(cs_lst2, function(i) i$iter)
   if (!all_int_eq(warmup) || !all_int_eq(thin) || !all_int_eq(iter)) 
     stop("not all iter/warmups/thin are the same in all CSV files")
-  n_kept0 <- 1 + (iter - warmup - 1) %/% thin
-  warmup2 <- 0
-  if (max(save_warmup) == 0L) { # all equal to 0L
-    n_kept <- n_save
-  } else if (min(save_warmup) == 1L) { # all equals to 1L 
-    warmup2 <- 1 + (warmup[1] - 1) %/% thin[1]
-    n_kept <- n_save - warmup2 
-  } 
-  if (n_kept0[1] != n_kept) {
-    warning("the number of iterations after warmup found (", n_kept, 
-            ") does not match iter/warmup/thin from CSV comments (",
-            paste(n_kept0, collapse = ','), ")")
 
-    if (n_kept < 0) {
-      warmup <- warmup + n_kept
-      n_kept <- 0
-      mode <- 2L
-    }
-    n_kept0 <- n_save
-    iter <- n_save
 
-    for (i in 1:length(cs_lst2)) {
-      cs_lst2[[i]]$warmup <- warmup
-      cs_lst2[[i]]$iter <- iter
-    }
-  }
+  # use the first CSV file name as model name
+  m_name <- sub("(_\\d+)*$", '', filename_rm_ext(basename(csvfiles[1])))
 
-  idx_kept <- if (warmup2 == 0) 1:n_kept else -(1:warmup2)
-  for (i in seq_along(samples)) {
-    m <- vapply(samples[[i]], function(x) mean(x[idx_kept]), numeric(1))
-    attr(samples[[i]], "mean_pars") <- m[-length(m)]
-    attr(samples[[i]], "mean_lp__") <- m["lp__"]
-  }
+  sdate <- do.call(max, lapply(csvfiles, function(csv) file.info(csv)$mtime))
+  sdate <- format(sdate, "%a %b %d %X %Y") # same format as date() 
 
+  chains <- length(samples)
+
+  mode <- 0L
   perm_lst <- lapply(1:chains, function(id) sample.int(n_kept))
+  par_fnames <- colnames(samples[[1]])
+  pars_oi <- unique_par(par_fnames)
+  dims_oi <- lapply(pars_oi, 
+                    function(i) {
+                      pat <- paste('^', i, '(\\.\\d+)*$', sep = '')
+                      i_fnames <- par_fnames[grepl(pat, par_fnames)]
+                      get_dims_from_fnames(i_fnames, i) 
+                    })
+  names(dims_oi) <- pars_oi  
 
   sim = list(samples = samples, 
-             iter = iter[1], 
-             thin = thin[1], 
-             warmup = warmup[1], 
+             iter = iter[[1]], 
+             thin = thin[[1]], 
+             warmup = warmup[[1]], 
              chains = chains, 
              n_save = rep(n_save, chains),
              warmup2 = rep(warmup2, chains),
