@@ -134,10 +134,8 @@ read_one_chain_csv <- function(csvfile, col_major=TRUE){
   param.count <- length(all.par.idx)
   sampler.param.count <- length(all.sampler.idx)
   
-  df <- structure(replicate(param.count,list(numeric(iter.count))),
-                  names = vnames[all.par.idx],
-                  row.names = c(NA,-iter.count),
-                  class = "data.frame")
+  df <- matrix(numeric(param.count*iter.count),nrow=iter.count,
+               dimnames = list(NULL,vnames[all.par.idx]))
   
   s.df <- structure(replicate(sampler.param.count,list(numeric(iter.count))),
                     names = vnames[all.sampler.idx],
@@ -215,7 +213,7 @@ read_one_chain_csv <- function(csvfile, col_major=TRUE){
   }
   idx_kept <- if (warmup2 == 0) 1:n_kept else -(1:warmup2)
   
-  m <- vapply(df, function(x) mean(x[idx_kept]), numeric(1))
+  m <- vapply(0:(ncol(df)-1), function(x) mean(df[x*nrow(df)+idx_kept]), numeric(1))  
   attr(df, "mean_pars") <- m[-length(m)]
   attr(df, "mean_lp__") <- m["lp__"]
   list(df,parsed.comments,c(n_kept=n_kept,n_save=n_save,warmup2=warmup2))

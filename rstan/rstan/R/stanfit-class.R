@@ -194,9 +194,9 @@ get_kept_samples2 <- function(n, sim) {
   lst <- vector("list", sim$chains)
   for (ic in 1:sim$chains) { 
     if (sim$warmup2[ic] > 0) 
-      lst[[ic]] <- sim$samples[[ic]][[n]][-(1:sim$warmup2[ic])][sim$permutation[[ic]]]
+      lst[[ic]] <- sim$samples[[ic]][-(1:sim$warmup2[ic]),n][sim$permutation[[ic]]]
     else 
-      lst[[ic]] <- sim$samples[[ic]][[n]][sim$permutation[[ic]]]
+      lst[[ic]] <- sim$samples[[ic]][sim$permutation[[ic]],n]
   } 
   do.call(c, lst)
 }
@@ -232,7 +232,7 @@ get_samples2 <- function(n, sim, inc_warmup = TRUE) {
   lst <- vector("list", sim$chains)
   for (ic in 1:sim$chains) {
     lst[[ic]] <- 
-      if (inc_warmup) sim$samples[[ic]][[n]] else sim$samples[[ic]][[n]][-(1:sim$warmup2[ic])]
+      if (inc_warmup) sim$samples[[ic]][,n] else sim$samples[[ic]][-(1:sim$warmup2[ic]),n]
   }
   lst
 } 
@@ -416,8 +416,7 @@ setMethod("get_posterior_mean", signature = "stanfit",
 setGeneric(name = "extract",
            def = function(object, ...) { standardGeneric("extract") }) 
 
-setMethod("extract", signature = "stanfit",
-          definition = function(object, pars, permuted = TRUE, 
+extract.stanfit <- function(object, pars, permuted = TRUE, 
                                 inc_warmup = FALSE, include = TRUE) {
             # Extract the samples in different forms for different parameters. 
             #
@@ -436,53 +435,54 @@ setMethod("extract", signature = "stanfit",
             #   If permuted is FALSE, return array with dimensions
             #   (# of iter (with or w.o. warmup), # of chains, # of flat parameters). 
 
-            if (object@mode == 1L) {
-              cat("Stan model '", object@model_name, "' is of mode 'test_grad';\n",
-                  "sampling is not conducted.\n", sep = '')
-              return(invisible(NULL)) 
-            } else if (object@mode == 2L) {
-              cat("Stan model '", object@model_name, "' does not contain samples.\n", sep = '') 
-              return(invisible(NULL)) 
-            } 
+  if (object@mode == 1L) {
+    cat("Stan model '", object@model_name, "' is of mode 'test_grad';\n",
+        "sampling is not conducted.\n", sep = '')
+    return(invisible(NULL)) 
+  } else if (object@mode == 2L) {
+    cat("Stan model '", object@model_name, "' does not contain samples.\n", sep = '') 
+    return(invisible(NULL)) 
+  } 
 
-            if(!include) pars <- setdiff(object@sim$pars_oi, pars)
-            pars <- if (missing(pars)) object@sim$pars_oi else check_pars_second(object@sim, pars) 
-            pars <- remove_empty_pars(pars, object@sim$dims_oi)
-            tidx <- pars_total_indexes(object@sim$pars_oi, 
-                                       object@sim$dims_oi, 
-                                       object@sim$fnames_oi, 
-                                       pars) 
-
-            n_kept <- object@sim$n_save - object@sim$warmup2
-            fun1 <- function(par_i) {
-              # sss <- sapply(tidx[[par_i]], get_kept_samples2, object@sim)
-              # if (is.list(sss))  sss <- do.call(c, sss)
-              # the above two lines are slower than the following line of code
-              sss <- do.call(cbind, lapply(tidx[[par_i]], get_kept_samples2, object@sim)) 
-              dim(sss) <- c(sum(n_kept), object@sim$dims_oi[[par_i]]) 
-              dimnames(sss) <- list(iterations = NULL)
-              sss 
-            } 
-           
-            if (permuted) {
-              slist <- lapply(pars, fun1) 
-              names(slist) <- pars 
-              return(slist) 
-            } 
-
-            tidx <- unlist(tidx, use.names = FALSE) 
-            tidxnames <- object@sim$fnames_oi[tidx] 
-            sss <- lapply(tidx, get_samples2, object@sim, inc_warmup) 
-            sss2 <- lapply(sss, function(x) do.call(c, x))  # concatenate samples from different chains
-            sssf <- unlist(sss2, use.names = FALSE) 
+  if(!include) pars <- setdiff(object@sim$pars_oi, pars)
+  pars <- if (missing(pars)) object@sim$pars_oi else check_pars_second(object@sim, pars) 
+  pars <- remove_empty_pars(pars, object@sim$dims_oi)
+  tidx <- pars_total_indexes(object@sim$pars_oi, 
+                             object@sim$dims_oi, 
+                             object@sim$fnames_oi, 
+                             pars) 
   
-            n2 <- object@sim$n_save[1]  ## assuming all the chains have equal iter 
-            if (!inc_warmup) n2 <- n2 - object@sim$warmup2[1] 
-            dim(sssf) <- c(n2, object@sim$chains, length(tidx)) 
-            cids <- sapply(object@stan_args, function(x) x$chain_id)
-            dimnames(sssf) <- list(iterations = NULL, chains = paste0("chain:", cids), parameters = tidxnames)
+  n_kept <- object@sim$n_save - object@sim$warmup2
+  fun1 <- function(par_i) {
+    # sss <- sapply(tidx[[par_i]], get_kept_samples2, object@sim)
+    # if (is.list(sss))  sss <- do.call(c, sss)
+    # the above two lines are slower than the following line of code
+    sss <- do.call(cbind, lapply(tidx[[par_i]], get_kept_samples2, object@sim)) 
+    dim(sss) <- c(sum(n_kept), object@sim$dims_oi[[par_i]]) 
+    dimnames(sss) <- list(iterations = NULL)
+    sss 
+  } 
+  
+  if (permuted) {
+    slist <- lapply(pars, fun1) 
+    names(slist) <- pars 
+    return(slist) 
+  } 
+  
+  tidx <- unlist(tidx, use.names = FALSE) 
+  tidxnames <- object@sim$fnames_oi[tidx] 
+  sss <- lapply(tidx, get_samples2, object@sim, inc_warmup) 
+  sss2 <- lapply(sss, function(x) do.call(c, x))  # concatenate samples from different chains
+  sssf <- unlist(sss2, use.names = FALSE) 
+  n2 <- object@sim$n_save[1]  ## assuming all the chains have equal iter 
+  if (!inc_warmup) n2 <- n2 - object@sim$warmup2[1]
+  dim(sssf) <- c(n2, object@sim$chains, length(tidx)) 
+  cids <- sapply(object@stan_args, function(x) x$chain_id)
+  dimnames(sssf) <- list(iterations = NULL, chains = paste0("chain:", cids), parameters = tidxnames)
             sssf 
-          })  
+}
+setMethod("extract", signature = "stanfit",
+          definition = extract.stanfit)  
 
 setMethod("summary", signature = "stanfit", 
           function(object, pars, 
