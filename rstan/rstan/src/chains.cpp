@@ -166,9 +166,17 @@ namespace rstan {
       Rcpp::IntegerVector n_save(static_cast<SEXP>(lst["n_save"]));
       Rcpp::IntegerVector warmup2(static_cast<SEXP>(lst["warmup2"]));
 
-      Rcpp::List slst(static_cast<SEXP>(allsamples[k]));  // chain k
-      Rcpp::NumericVector nv(static_cast<SEXP>(slst[n])); // parameter n
-      samples.assign(warmup2[k] + nv.begin(), nv.end());
+      SEXP sample_data = static_cast<SEXP>(allsamples[k]);
+      if(Rcpp::internal::is_matrix(sample_data)){
+        Rcpp::NumericMatrix smatrix(sample_data);  // chain k
+        Rcpp::NumericVector nv(smatrix(Rcpp::_,n)); // parameter n
+        samples.assign(warmup2[k] + nv.begin(), nv.end());
+      } else {
+        Rcpp::List slst(static_cast<SEXP>(allsamples[k]));  // chain k
+        Rcpp::NumericVector nv(static_cast<SEXP>(slst[n])); // parameter n
+        samples.assign(warmup2[k] + nv.begin(), nv.end());
+      }
+      
     }
 
     void validate_param_idx(SEXP sim, size_t n) {
