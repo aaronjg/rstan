@@ -268,7 +268,7 @@ par_traceplot <- function(sim, n, par_name, inc_warmup = TRUE, window = NULL, ..
   } 
 
   for (i in 1:sim$chains)  
-    lines(id, sim$samples[[i]][[n]][idx], 
+    lines(id, sim$samples[[i]][idx,n], 
           xlab = '', ylab = '', col = chain_cols[(i-1) %% 6 + 1], ...) 
 } 
 
@@ -313,7 +313,7 @@ setMethod("get_logposterior", "stanfit",
               return(invisible(NULL)) 
             } 
 
-            llp <- lapply(object@sim$samples, function(x) x[['lp__']]) 
+            llp <- lapply(object@sim$samples, function(x) x[,'lp__']) 
             if (inc_warmup) return(llp)
             if (all(object@sim$warmup2 == 0)) return(llp)
             return(mapply(function(x, w) x[-(1:w)], 

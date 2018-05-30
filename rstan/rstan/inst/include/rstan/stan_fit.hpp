@@ -815,6 +815,8 @@ int command(stan_args& args, Model& model, Rcpp::List& holder,
                                                         init_writer.x());
     holder.attr("mean_pars") = mean_pars;
     holder.attr("mean_lp__") = mean_lp;
+    holder.attr("class") = "data.frame";
+    holder.attr("row.names") = Rcpp::NumericVector::create(NA_REAL,Rcpp::as<Rcpp::NumericVector>(holder[0]).size());
 
     std::string comments = comment_stream.str();
     size_t start = 0;
